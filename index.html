@@ -219,6 +219,7 @@ function ForgeApp() {
   const [reflectDate, setReflectDate] = useState(null);
   const [reflectReason, setReflectReason] = useState(null);
   const [markPopup, setMarkPopup] = useState(null); // {id, type:'event'|'habit', x, y}
+  const [alarmSettings, setAlarmSettings] = useState(()=>{try{return JSON.parse(localStorage.getItem("forge-alarm-settings"))||{masterEnabled:true,vibration:true,sound:true,defaultMinsBefore:0,timerAlarm:true};}catch{return{masterEnabled:true,vibration:true,sound:true,defaultMinsBefore:0,timerAlarm:true};}});
   const [focusLog, setFocusLog] = useState(()=>{try{return JSON.parse(localStorage.getItem("forge-focus-log"))||[];}catch{return[];}});
 
   useEffect(() => {
@@ -247,6 +248,7 @@ function ForgeApp() {
   useEffect(() => { try { localStorage.setItem('forge-focus-log', JSON.stringify(focusLog)); } catch(e) {} }, [focusLog]);
   useEffect(() => { try { localStorage.setItem('forge-habits', JSON.stringify(habits)); } catch(e) {} }, [habits]);
   useEffect(() => { try { localStorage.setItem('forge-reflections', JSON.stringify(reflections)); } catch(e) {} }, [reflections]);
+  useEffect(() => { try { localStorage.setItem('forge-alarm-settings', JSON.stringify(alarmSettings)); } catch(e) {} }, [alarmSettings]);
 
   const isHabitActive = (h, ds) => {
     const d = parseDateStr(ds);
@@ -315,6 +317,7 @@ function ForgeApp() {
         const next=p+1;
         if(focusSession.mode==="timer"&&focusSession.duration>0&&next>=focusSession.duration*60){
           setFocusSession(ps=>ps?{...ps,paused:true,completed:true}:ps);
+              if(window.ForgeBridge&&alarmSettings.timerAlarm) try{window.ForgeBridge.timerDone(focusSession.title||'Focus session', Math.floor(total/60)+'m');}catch(e){}
         }
         return next;
       });
@@ -504,7 +507,9 @@ function ForgeApp() {
       endAP: ev ? to12(Math.floor(ev.endMin/60)).ap : to12(Math.min(23,nowH+1)).ap,
       durTab: "duration",
       colorId: ev ? ev.colorId : "lavender",
-      habitId: ev?.habitId || undefined
+      habitId: ev?.habitId || undefined,
+      alarmEnabled: ev ? (ev.alarmEnabled !== undefined ? ev.alarmEnabled : alarmSettings.masterEnabled) : alarmSettings.masterEnabled,
+      alarmMinsBefore: ev ? (ev.alarmMinsBefore || 0) : alarmSettings.defaultMinsBefore
     });
     setEditMode(true);
     setCreating(isNew);
@@ -545,7 +550,9 @@ function ForgeApp() {
         endDate, endMin,
         colorId: editForm.colorId, description: editForm.description,
         tasks: editForm.tasks || [], done: false,
-        ...(editForm.habitId?{habitId:editForm.habitId}:{})
+        ...(editForm.habitId?{habitId:editForm.habitId}:{}),
+        alarmEnabled: editForm.alarmEnabled || false,
+        alarmMinsBefore: editForm.alarmMinsBefore || 0
       };
       setAllEvents(p => [...p, newEv]);
       setDetailEvent(newEv);
@@ -556,7 +563,9 @@ function ForgeApp() {
         startDate: editForm.startDate, startMin,
         endDate, endMin,
         colorId: editForm.colorId,
-        habitId: editForm.habitId || undefined
+        habitId: editForm.habitId || undefined,
+        alarmEnabled: editForm.alarmEnabled || false,
+        alarmMinsBefore: editForm.alarmMinsBefore || 0
       };
       setAllEvents(p => p.map(e => e.id === updated.id ? updated : e));
       setDetailEvent(updated);
@@ -607,6 +616,7 @@ function ForgeApp() {
       setAllEvents(p=>p.map(e=>e.id===focusSession.eventId?{...e,tasks:focusSession.tasks}:e));
     }
     setFocusSession(null);setFocusElapsed(0);
+    if(window.ForgeBridge) try{window.ForgeBridge.dismissTimer();}catch(e){}
   };
 
   const duplicateEvent = (ev) => {
@@ -1178,6 +1188,35 @@ function ForgeApp() {
               <label style={{fontSize:9,color:"rgba(255,255,255,0.3)",fontFamily:"'Azeret Mono',monospace",letterSpacing:1.5}}>DESCRIPTION</label>
               <textarea value={editForm.description} onChange={e=>setEditForm(f=>({...f,description:e.target.value}))} placeholder="Add details..." rows={3}
                 style={{width:"100%",background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:12,padding:"12px 14px",color:"#f4f4f5",fontSize:13,fontFamily:"'Outfit',sans-serif",marginTop:6,outline:"none",resize:"none",lineHeight:1.6}}/>
+            </div>
+
+            {/* Alarm */}
+            <div style={{marginBottom:18}}>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+                <label style={{fontSize:9,color:"rgba(255,255,255,0.3)",fontFamily:"'Azeret Mono',monospace",letterSpacing:1.5}}>ALARM</label>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+                <div onClick={()=>setEditForm(f=>({...f,alarmEnabled:!f.alarmEnabled}))} style={{
+                  width:44,height:24,borderRadius:12,cursor:"pointer",padding:2,transition:"all 0.2s",
+                  background:editForm.alarmEnabled?t.accent:"rgba(255,255,255,0.08)"
+                }}>
+                  <div style={{width:20,height:20,borderRadius:10,background:"#fff",transition:"all 0.2s",
+                    transform:editForm.alarmEnabled?"translateX(20px)":"translateX(0)"}}/>
+                </div>
+                <span style={{fontSize:13,color:editForm.alarmEnabled?t.tx:"rgba(255,255,255,0.25)",fontFamily:"'Outfit',sans-serif"}}>{editForm.alarmEnabled?"On":"Off"}</span>
+              </div>
+              {editForm.alarmEnabled&&<div>
+                <div style={{fontSize:10,color:"rgba(255,255,255,0.15)",fontFamily:"'Outfit',sans-serif",marginBottom:6}}>Alert me</div>
+                <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+                  {[{v:0,l:"At time"},{v:5,l:"5 min before"},{v:10,l:"10 min"},{v:15,l:"15 min"},{v:30,l:"30 min"},{v:60,l:"1 hour"}].map(opt=>(
+                    <button key={opt.v} onClick={()=>setEditForm(f=>({...f,alarmMinsBefore:opt.v}))} style={{
+                      padding:"6px 12px",borderRadius:8,border:"none",cursor:"pointer",fontSize:12,fontFamily:"'Outfit',sans-serif",fontWeight:500,
+                      background:(editForm.alarmMinsBefore||0)===opt.v?`rgba(${aR},0.12)`:"rgba(255,255,255,0.03)",
+                      color:(editForm.alarmMinsBefore||0)===opt.v?t.accent:"rgba(255,255,255,0.25)"
+                    }}>{opt.l}</button>
+                  ))}
+                </div>
+              </div>}
             </div>
 
             {/* Link to Habit */}
@@ -1828,6 +1867,49 @@ function ForgeApp() {
                 <span style={{fontSize:9,fontWeight:isActive?700:500,color:isActive?th.accent:th.tx,fontFamily:"'Outfit',sans-serif",opacity:isActive?1:0.5}}>{th.name}</span>
               </button>;
             })}
+          </div>
+        </div>
+
+        {/* ── NOTIFICATIONS ── */}
+        <div style={{marginBottom:24}}>
+          <div style={{fontSize:11,color:"rgba(255,255,255,0.3)",fontFamily:"'Azeret Mono',monospace",letterSpacing:1.5,marginBottom:12}}>NOTIFICATIONS</div>
+          {[
+            {key:"masterEnabled",label:"Event alarms",desc:"Notifications for calendar events"},
+            {key:"timerAlarm",label:"Timer alarm",desc:"Sound and vibration when timer ends"},
+            {key:"sound",label:"Sound",desc:"Play alarm sound"},
+            {key:"vibration",label:"Vibration",desc:"Vibrate on alarm"},
+          ].map(item=>(
+            <div key={item.key} style={{display:"flex",alignItems:"center",gap:12,padding:"12px 0",borderBottom:"1px solid rgba(255,255,255,0.03)"}}>
+              <div style={{flex:1}}>
+                <div style={{fontSize:15,color:t.tx,fontFamily:"'Outfit',sans-serif",fontWeight:500}}>{item.label}</div>
+                <div style={{fontSize:11,color:"rgba(255,255,255,0.15)",fontFamily:"'Outfit',sans-serif"}}>{item.desc}</div>
+              </div>
+              <div onClick={()=>setAlarmSettings(p=>({...p,[item.key]:!p[item.key]}))} style={{
+                width:44,height:24,borderRadius:12,cursor:"pointer",padding:2,transition:"all 0.2s",
+                background:alarmSettings[item.key]?t.accent:"rgba(255,255,255,0.08)"
+              }}>
+                <div style={{width:20,height:20,borderRadius:10,background:"#fff",transition:"all 0.2s",
+                  transform:alarmSettings[item.key]?"translateX(20px)":"translateX(0)"}}/>
+              </div>
+            </div>
+          ))}
+          <div style={{display:"flex",alignItems:"center",gap:12,padding:"12px 0"}}>
+            <div style={{flex:1}}>
+              <div style={{fontSize:15,color:t.tx,fontFamily:"'Outfit',sans-serif",fontWeight:500}}>Default alert time</div>
+              <div style={{fontSize:11,color:"rgba(255,255,255,0.15)",fontFamily:"'Outfit',sans-serif"}}>For new events</div>
+            </div>
+            <div style={{display:"flex",gap:4}}>
+              {[{v:0,l:"On time"},{v:5,l:"5m"},{v:15,l:"15m"},{v:30,l:"30m"}].map(opt=>(
+                <button key={opt.v} onClick={()=>setAlarmSettings(p=>({...p,defaultMinsBefore:opt.v}))} style={{
+                  padding:"5px 10px",borderRadius:7,border:"none",cursor:"pointer",fontSize:11,fontFamily:"'Outfit',sans-serif",
+                  background:alarmSettings.defaultMinsBefore===opt.v?`rgba(${aR},0.12)`:"rgba(255,255,255,0.03)",
+                  color:alarmSettings.defaultMinsBefore===opt.v?t.accent:"rgba(255,255,255,0.25)"
+                }}>{opt.l}</button>
+              ))}
+            </div>
+          </div>
+          <div style={{fontSize:11,color:"rgba(255,255,255,0.1)",fontFamily:"'Outfit',sans-serif",marginTop:8,lineHeight:1.5}}>
+            Alarm volume is controlled by your phone's alarm volume slider in system Settings.
           </div>
         </div>
 
